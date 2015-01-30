@@ -33,8 +33,9 @@ var db = new sqlite3.Database('./fitbit.db');
 var fb_consumer_key = '2fb466d29ca149799037a6a263ba0bfc';
 var fb_consumer_sec = '91f273d309e746119b4f0f9303363cb7';
 var fitbitClient = require('fitbit-js')
-		(fb_consumer_key, fb_consumer_sec, 'http://test');
+		(fb_consumer_key, fb_consumer_sec, 'http://dummy');
 
+var VERSION = '1.0';
 var LOG_DEBUG = 0;
 var LOG_INFO = 1;
 var LOG_OK = 2;
@@ -67,22 +68,22 @@ var options = stdio.getopt({
 // ----------------------------------------------------------------------------
 // Fake some objects to mimic express for command line usage
 
-var req = {
+var xreq = {
 	cookies: {},
-	url: 'http://juhu'
+	url: 'http://dummy'
 };
 
-var res = {
+var xres = {
 	cookie: function(name, value) {
 		log(LOG_DEBUG, 'res:cookie(' + name + ')', value);
-		req.cookies[name] = value;
+		xreq.cookies[name] = value;
 	},
 
 	redirect: function(redirectToUrl) {
 		log(LOG_DEBUG, 'res:redirect', redirectToUrl);
-		req.url = redirectToUrl;
+		xreq.url = redirectToUrl;
 
-		if (redirectToUrl.substring(0, 50) == "https://www.fitbit.com/oauth/authorize?oauth_token=") {			
+		if (redirectToUrl.substring(0, 51) == "https://www.fitbit.com/oauth/authorize?oauth_token=") {
 			var pu = url.parse(redirectToUrl, true);
 			oauth_token = pu.query.oauth_token;
 			log(LOG_DEBUG, 'oauth_token', oauth_token);
@@ -107,7 +108,7 @@ var res = {
 				// build new url to access token
 				pu.search = null;
 				pu.query.oauth_verifier = pin;
-				req.url = url.format(pu);
+				xreq.url = url.format(pu);
 
 				requestToken(doExit);
 			});
@@ -122,7 +123,8 @@ var res = {
 
 //process.stdin.setEncoding('utf8');
 
-log(LOG_DEBUG, 'FitBit client', fitbitClient);
+log(LOG_INFO, 'FitBit Dumper, Version ' + VERSION);
+log(LOG_DEBUG, 'FitBit client, Version ' + fitbitClient.version);
 
 var now = moment();
 end_date = now.clone();
@@ -152,61 +154,65 @@ if(start_date > end_date) {
 }
 
 days_to_dump = end_date.diff(start_date, 'days') + 1;
-console.log('Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
-	', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
-	', Days: ' + days_to_dump.toString().cyan);
-//doExit();
 
+main();
 
-
-// check if FitBitDump already authorized
-fs.exists('./fitbit.oauth', function(exists) {
-	if(options.register) {
-		requestToken(doExit);
-	}
-	else if(options.dbinit) {
-		createDatabase(doExit);
-	}
-	else if(options.dbdump)
-		dumpDatabase(doExit);
-	else
-		if(exists) {
-			//master_token = require('./fitbit.oauth');
-			//var data = fs.readFileSync('./fitbit.oauth', 'utf8');
-
-			fs.readFile("./fitbit.oauth", 'utf8', function(error, data) {
-				if(error) {
-					log(LOG_ERROR, 'Invalid local OAuth token format', error);
-					doExit(error);
-				}
-
-				if(!error && data) {
-					master_token = JSON.parse(data);
-					log(LOG_OK, 'Using local OAuth tokens', master_token);
-
-					// get data for each day from fitbit
-					var date = start_date.clone();
-					var cnt = days_to_dump;
-					do {
-						requestData(date.clone());
-						date.add(1, 'days');
-						cnt--;
-					} while(cnt > 0);
-				}
-			});
-		}
-		else {
-			log(LOG_WARNING, 'OAuth token not available, start registering',
-				fitbitClient);
+function main() {
+	// check if FitBitDump already authorized
+	fs.exists('./fitbit.oauth', function(exists) {
+		if(options.register) {
 			requestToken(doExit);
 		}
-});
+		else if(options.dbinit) {
+			createDatabase(doExit);
+		}
+		else if(options.dbdump)
+			dumpDatabase(doExit);
+		else
+			if(exists)
+				doWork(doExit);
+			else {
+				log(LOG_WARNING, 'OAuth token not available, start registering',
+					fitbitClient);
+				requestToken(doExit);
+			}
+	});
+}
+
+function doWork(callback) {
+	log(LOG_INFO, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
+		', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
+		', Days: ' + days_to_dump.toString().cyan);
+		
+	fs.readFile("./fitbit.oauth", 'utf8', function(error, data) {
+		if(error) {
+			log(LOG_ERROR, 'Invalid local OAuth token format. ' +
+				'Use -r to initialize.', error);
+			doExit(error);
+		}
+
+		if(!error && data) {
+			master_token = JSON.parse(data);
+			log(LOG_OK, 'Using FitBit API with local OAuth tokens', master_token);
+
+			// get data for each day from fitbit
+			var date = start_date.clone();
+			var cnt = days_to_dump;
+			do {
+				requestData(date.clone());
+				date.add(1, 'days');
+				cnt--;
+			} while(cnt > 0);
+//console.log('######');
+		}
+	});
+}
 
 function doExit(error) {
 	if(error)
-		console.log('FitBit dumper completed with errors'.red);
+		log(LOG_ERROR, 'FitBit dumper completed with errors'.red, error);
 	else
-		console.log('FitBit dumper completed');
+		log(LOG_OK, 'FitBit dumper completed');
 	db.close();
 	process.exit();
 }
@@ -220,13 +226,16 @@ function requestToken(callback) {
 	// request an app token/pin
 	log(LOG_INFO, 'Requesting FitBit OAuth token ...');
 
-	fitbitClient.getAccessToken(req, res, function (error, newToken) {
+	fitbitClient.getAccessToken(xreq, xres, function (error, newToken) {
 		if(error) {
 			log(LOG_ERROR, 'Error requesting OAuth token', error);
 			if(callback)
 				callback(error);
 		}
-		else
+		else {
+//console.log('----------');
+//console.log(util.inspect(newToken, { showHidden: true, depth: null, colors: true }));
+//console.log('----------');
 			if(newToken) {
 				master_token = newToken;
 				log(LOG_OK, 'New OAuth token available', master_token);
@@ -244,6 +253,7 @@ function requestToken(callback) {
 								callback(error);
 						});
 			}
+		}
 	});
 }
 
@@ -256,11 +266,17 @@ function requestData(date, callback) {
 		{ token: master_token },
 		function(error, res, activities) {
 			if(error) {
-				log(LOG_ERROR, 'API error, url=' + actUrl, error);
+				if(!options.verbose)
+					process.stdout.write('A'.red);
+				else
+					log(LOG_ERROR, 'API error, url=' + actUrl, error);
 				if(callback)
 					callback(error);
 			}
 			else {
+				// A - activities
+				if(!options.verbose)
+					process.stdout.write('A'.green);
 //console.log('----------');
 //console.log(util.inspect(activities, { showHidden: true, depth: null, colors: true }));
 //console.log('----------');
@@ -270,14 +286,20 @@ function requestData(date, callback) {
 					{ token: master_token },
 					function(error, res, weight) {
 						if(error) {
-							log(LOG_ERROR, 'API error, url=' + weightUrl, error);
+							if(!options.verbose)
+								process.stdout.write('W'.red);
+							else
+								log(LOG_ERROR, 'API error, url=' + weightUrl, error);
 							if(callback)
 								callback(error);
 						}
 						else {
-console.log('----------');
-console.log(util.inspect(weight, { showHidden: true, depth: null, colors: true }));
-console.log('----------');
+							// W - weight
+							if(!options.verbose)
+								process.stdout.write('W'.green);
+//console.log('----------');
+//console.log(util.inspect(weight, { showHidden: true, depth: null, colors: true }));
+//console.log('----------');
 
 							// https://wiki.fitbit.com/display/API/API-Get-Sleep
 							var sleepUrl = '/user/-/sleep/date/' + date.format('YYYY-MM-DD') + '.json';
@@ -285,11 +307,17 @@ console.log('----------');
 								{ token: master_token },
 								function(error, res, sleep) {
 									if(error) {
-										log(LOG_ERROR, 'API error, url=' + sleepUrl, error);
+										if(!options.verbose)
+											process.stdout.write('S'.red);
+										else
+											log(LOG_ERROR, 'API error, url=' + sleepUrl, error);
 										if(callback)
 											callback(error);
 									}
 									else {
+										// S - sleep
+										if(!options.verbose)
+											process.stdout.write('S'.green);
 //console.log('----------');
 //console.log(util.inspect(sleep, { showHidden: true, depth: null, colors: true }));
 //console.log('----------');
@@ -348,7 +376,7 @@ function createDatabase(callback) {
 }
 
 function saveFitBitRecord(date, activities, weight, sleep, callback) {
-	log(LOG_INFO, 'Save FitBit data to database ' + date.format('YYYY-MM-DD'));
+	log(LOG_DEBUG, 'Save FitBit data to database ' + date.format('YYYY-MM-DD'));
 
 	db.serialize(function() {
 		var w = 0.0;
@@ -356,17 +384,26 @@ function saveFitBitRecord(date, activities, weight, sleep, callback) {
 			w = weight.weight[0].weight;
 		}
 	
-		db.run("INSERT INTO data VALUES (" +
+		db.run("INSERT OR IGNORE INTO data VALUES (" +
 			"(date('" + date.format('YYYY-MM-DD') + "')), " +
 			activities.summary.steps + ', ' + activities.summary.floors + ', ' +
 			activities.summary.caloriesOut + ', ' + activities.summary.fairlyActiveMinutes + ', ' +
 			activities.summary.lightlyActiveMinutes + ', ' + activities.summary.veryActiveMinutes + ', ' +
 			w + ')',
 			function(error) {
-				if(error)
-					log(LOG_ERROR, 'Error writing database', error);
-				else
-					log(LOG_OK, 'FitBit data successfully saved');
+				if(error) {
+					// D = DB Write
+					if(!options.verbose)
+						process.stdout.write('D'.red);
+					else
+						log(LOG_ERROR, 'Error writing database', error);
+				}
+				else {
+					if(!options.verbose)
+						process.stdout.write('D'.green);
+					else
+						log(LOG_DEBUG, 'FitBit data successfully saved');
+				}
 
 				if(callback)
 					callback(error);
@@ -376,6 +413,9 @@ function saveFitBitRecord(date, activities, weight, sleep, callback) {
 
 function dumpDatabase(callback) {
 	log(LOG_INFO, 'Dump FitBit records');
+	log(LOG_INFO, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
+		', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
+		', Days: ' + days_to_dump.toString().cyan);
 	
 	db.each('SELECT rowid AS id, * ' +
 			'FROM data ORDER BY date ASC', function(error, row) {
