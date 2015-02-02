@@ -355,7 +355,21 @@ function createDatabase(callback) {
 					'lightAct INTEGER NOT NULL DEFAULT 0, ' +
 					'mediumAct INTEGER NOT NULL DEFAULT 0, ' +
 					'highAct INTEGER NOT NULL DEFAULT 0, ' +
-					'weight FLOAT NOT NULL DEFAULT 0.0)', function(error) {
+					'weightKg FLOAT NOT NULL DEFAULT 0.0, ' +
+					'weightTime INTEGER NOT NULL DEFAULT 0, ' +
+					'weightBmi FLOAT NOT NULL DEFAULT 0, ' +
+					'sleepStartTime INTEGER DEFAULT 0,' +
+					'MinutesToFallAsleep INTEGER NOT NULL DEFAULT 0, ' +
+					'AwakeningCount INTEGER NOT NULL DEFAULT 0, ' +
+					'AwakeCount INTEGER NOT NULL DEFAULT 0, ' +
+					'MinutesAwake INTEGER NOT NULL DEFAULT 0, ' + 
+					'MinutesRestless INTEGER NOT NULL DEFAULT 0, ' +
+					'DurationMs INTEGER NOT NULL DEFAULT 0, ' + 
+					'RestlessCount INTEGER NOT NULL DEFAULT 0, ' +
+					'MinutesToAwake INTEGER NOT NULL DEFAULT 0, ' +
+					'MinutesAfterWakeup INTEGER NOT NULL DEFAULT 0, ' +
+					'Efficiency FLOAT NOT NULL DEFAULT 0.0' + 
+					')', function(error) {
 						if(error)
 							log(LOG_ERROR, 'Error creating data table', error);
 						else {
@@ -379,17 +393,64 @@ function saveFitBitRecord(date, activities, weight, sleep, callback) {
 	log(LOG_DEBUG, 'Save FitBit data to database ' + date.format('YYYY-MM-DD'));
 
 	db.serialize(function() {
-		var w = 0.0;
+		// Weight
+		var weightKg = 0.0;
+		var weightTime = 'NULL';
+		var weightBmi = 0.0;
 		if(weight.weight && weight.weight.length > 0) {
-			w = weight.weight[0].weight;
+			var w = weight.weight[0];
+			weightKg = w.weight;
+			weightTime = "time('" + w.time + "')";
+			weightBmi = w.bmi;
 		}
-	
-		db.run("INSERT OR IGNORE INTO data VALUES (" +
+		
+		// Sleep
+		var sleepStartTime = 'NULL';
+		var MinutesToFallAsleep = 0;
+		var AwakeningCount = 0;
+		var AwakeCount = 0;
+		var MinutesAwake = 0;
+		var MinutesRestless = 0;
+		var DurationMs = 0;
+		var RestlessCount = 0;
+		var MinutesToAwake = 0;
+		var MinutesAfterWakeup = 0;
+		var Efficiency = 0.0;
+		if(sleep.sleep && sleep.sleep.length > 0) {
+			var s;
+			for(var i = 0; i <= sleep.sleep.length; i++) {
+				s = sleep.sleep[i];
+				if(s.isMainSleep) {
+					sleepStartTime = "datetime('" + s.startTime + "')";
+					MinutesToFallAsleep = s.minutesToFallAsleep;
+					AwakeningCount = s.awakeningsCount;
+					AwakeCount = s.awakeCount;
+					MinutesAwake = s.minutesAwake;
+					MinutesRestless = s.restlessDuration;
+					DurationMs = s.duration;
+					RestlessCount = s.restlessCount;
+					MinutesToAwake = s.awakeDuration;
+					MinutesAfterWakeup = s.minutesAfterWakeup;
+					Efficiency = s.efficiency;
+					break;
+				}
+			}
+		}
+		
+		var sql = "INSERT INTO data VALUES (" +
 			"(date('" + date.format('YYYY-MM-DD') + "')), " +
 			activities.summary.steps + ', ' + activities.summary.floors + ', ' +
 			activities.summary.caloriesOut + ', ' + activities.summary.fairlyActiveMinutes + ', ' +
 			activities.summary.lightlyActiveMinutes + ', ' + activities.summary.veryActiveMinutes + ', ' +
-			w + ')',
+			weightKg + ', ' + weightTime + ', ' + weightBmi + ', ' +
+			sleepStartTime + ', ' + MinutesToFallAsleep + ', ' + AwakeningCount + ', ' +
+			AwakeCount + ', ' + MinutesAwake + ', ' + MinutesRestless + ', ' + DurationMs + ', ' +
+			RestlessCount + ', ' + MinutesToAwake + ', ' + MinutesAfterWakeup + ', ' + 
+			Efficiency +
+			')';
+		log(LOG_DEBUG, 'SQL insert statement', sql);
+			
+		db.run(sql,
 			function(error) {
 				if(error) {
 					// D = DB Write
