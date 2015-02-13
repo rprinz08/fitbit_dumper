@@ -21,8 +21,9 @@
 
 var Q = require('q'),
 	util = require('util'),
+	os = require('os'),
 	fs = require('fs'),
-	printf = require('printf'),
+	sprintf = require('sprintf').sprintf,
 	colors = require('colors'),
 	url = require('url'),
 	spawn = require('open'),
@@ -31,10 +32,14 @@ var Q = require('q'),
 	sqlite3 = require('sqlite3').verbose();
 var db = new sqlite3.Database('./fitbit.db');
 
+var myName = process.argv[1];
+
+var FAKE_URL = 'http://dummy';
+
 var fb_consumer_key = '2fb466d29ca149799037a6a263ba0bfc';
 var fb_consumer_sec = '91f273d309e746119b4f0f9303363cb7';
 var fitbitClient = require('fitbit-js')
-		(fb_consumer_key, fb_consumer_sec, 'http://dummy');
+		(fb_consumer_key, fb_consumer_sec, FAKE_URL);
 
 var VERSION = '1.0';
 var LOG_DEBUG = 0;
@@ -56,14 +61,22 @@ var end_date = now.clone();
 start_date.subtract(DEFAULT_DAYS, 'days');
 var days_to_dump;
 
+//var PROGRESS_CHARS = '-\|/';
+var PROGRESS_CHARS = ['.    ','..   ','...  ','.... ', '.....'];
+var progress_tick = null;
+var progress_prompt = '';
+var processed_count = 0;
+var ignored_count = 0;
+
 // command line options
 var options = stdio.getopt({
 	'start': { key: 's', description: 'Start date ' + DATE_FORMAT, args: 1 },
 	'end': { key: 'e', description: 'End date ' + DATE_FORMAT, args: 1 },
+	'force': { key: 'f', description: 'Force download from FitBit, even if local data already exists', args: 1 },
 	'verbose': { key: 'v', description: 'Verbose debug output' },
-	'dbinit': { key: 'i', description: 'Initialize database' },
+	'dbinit': { key: 'i', description: '(Re)Initialize database. ' + 'DELETES ALL EXISTING LOCAL DATA!'.red },
 	'dbdump': { key: 'd', description: 'Dump out database as CSV' },
-	'register': { key: 'r', description: 'Register with FitBit' }
+	'register': { key: 'r', description: '(Re)Register with FitBit' }
 });
 
 
@@ -73,25 +86,25 @@ var options = stdio.getopt({
 
 var fakeRequest = {
 	cookies: {},
-	url: 'http://dummy'
+	url: FAKE_URL
 };
 
 var fakeResponse = {
 	cookie: function(name, value) {
-		log(LOG_DEBUG, 'res:cookie(' + name + ')', value);
+		log(LOG_DEBUG, true, 'res:cookie(' + name + ')', value);
 		
 		fakeRequest.cookies[name] = value;
 	},
 
 	redirect: function(redirectToUrl) {
-		log(LOG_DEBUG, 'res:redirect', redirectToUrl);
+		log(LOG_DEBUG, true, 'res:redirect', redirectToUrl);
 		
 		fakeRequest.url = redirectToUrl;
 
 		if (redirectToUrl.substring(0, 51) == "https://www.fitbit.com/oauth/authorize?oauth_token=") {
 			var pu = url.parse(redirectToUrl, true);
 			oauth_token = pu.query.oauth_token;
-			log(LOG_DEBUG, 'oauth_token', oauth_token);
+			log(LOG_DEBUG, true, 'oauth_token', oauth_token);
 
 			console.log('\r\n\r\Use your browser to open this URL:\r\n');
 			console.log(redirectToUrl.cyan);
@@ -99,10 +112,9 @@ var fakeResponse = {
 
 			// start user browser for fitbit registration
 			spawn(redirectToUrl, function(error) {
-				if(error) {
-					log(LOG_ERROR, 'Error starting user web browser');
-					doExit(error);
-				}
+				//if(error) {
+				//	log(LOG_ERROR, 'Error starting user web browser');
+				//}
 			});
 
 			// ask user for pin from fitbit registration
@@ -129,32 +141,28 @@ var fakeResponse = {
 // ----------------------------------------------------------------------------
 // Main part
 
-main();
+main()
+	.then(doExit)
+	.fail(doExit);		
 
 //process.stdin.setEncoding('utf8');
 
 function main() {
-	log(LOG_INFO, 'FitBit Dumper, Version ' + VERSION);
-	log(LOG_DEBUG, 'FitBit client, Version ' + fitbitClient.version);
-
-	if(options.register) {
-		requestToken()
-			.then(doExit)
-			.fail(doExit);		
-		return;
-	}
+	var deferred = Q.defer();
 	
-	if(options.dbinit) {
-		createDatabase()
-			.then(doExit)
-			.fail(doExit);		
-		return;
-	}
+	log(LOG_INFO, true, 'FitBit Dumper, Version ' + VERSION);
+	log(LOG_DEBUG, true, 'FitBit client, Version ' + fitbitClient.version);
+
+	if(options.register)
+		return requestToken();
+	
+	if(options.dbinit)
+		return createDatabase();
 	
 	if(options.start) {
 		start_date = checkDate(options.start, 'start date');
 		if(!start_date)
-			doExit(true);
+			deferred.reject(new Error('Invalid start date'));
 		if(!options.end)
 			end_date = start_date.clone().add(DEFAULT_DAYS, 'days');
 	}
@@ -162,7 +170,7 @@ function main() {
 	if(options.end) {
 		end_date = checkDate(options.end, 'end date');
 		if(!end_date)
-			doExit(true);
+			deferred.reject(new Error('Invalid end date'));
 		if(!options.start)
 			start_date = end_date.clone().subtract(DEFAULT_DAYS, 'days');
 	}
@@ -175,41 +183,52 @@ function main() {
 
 	days_to_dump = end_date.diff(start_date, 'days') + 1;
 
-	if(options.dbdump) {
-		dumpDatabase()
-			.then(doExit)
-			.fail(doExit);
-		return;
-	}
+	if(options.dbdump)
+		return dumpDatabase();
 	
 	// check if FitBitDump already authorized
 	fs.exists('./fitbit.oauth', function(exists) {
 		if(exists)
 			doWork()
-				.then(doExit)
-				.fail(doExit);
+				.then(function() {
+					log(LOG_OK, true, 
+						'Processed ' + processed_count.toString().cyan + ', ' +
+						'ignored: ' + ignored_count.toString().cyan);
+					deferred.resolve();
+				})
+				.fail(function(error) {
+					deferred.reject(error);
+				});
 		else {
-			log(LOG_WARNING, 'OAuth token not available, start registering',
+			log(LOG_WARNING, true, 'OAuth token not available, start registering',
 				fitbitClient.version);
-			log(LOG_WARNING, 'If this is the first time use this software you have');
-			log(LOG_WARNING, 'to register it with your FitBit account.');
+			log(LOG_WARNING, true, 'If this is the first time use this software you have');
+			log(LOG_WARNING, true, 'to register it with your FitBit account.');
 			requestToken()
-				.then(doExit)
-				.fail(doExit);		
+				.then(function() {
+					deferred.resolve();
+				})
+				.fail(function(error) {
+					deferred.reject(error);
+				});
 		}
 	});
+	
+	return deferred.promise;
 }
 
 function doWork() {
 	var deferred = Q.defer();
 	
-	log(LOG_INFO, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
+	processed_count = 0;
+	
+	log(LOG_INFO, true, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', Days: ' + days_to_dump.toString().cyan);
 		
 	fs.readFile("./fitbit.oauth", 'utf8', function(error, data) {
 		if(error) {
-			log(LOG_ERROR, 'Invalid local OAuth token format. ' +
+			log(LOG_ERROR, true, 'Invalid local OAuth token format. ' +
 				'Use -r to initialize.');
 			deferred.reject(new Error(error));
 		}
@@ -217,23 +236,37 @@ function doWork() {
 		if(!error && data) {
 			var queue = [];
 			master_token = JSON.parse(data);
-			log(LOG_OK, 'Using FitBit API with local OAuth tokens', master_token);
+			log(LOG_OK, true, 'Using FitBit API with local OAuth tokens', master_token);
+			log(LOG_INFO, true, 'Processing ...');
 
+			showProgress('Get data', true);
+			
 			// get data for each day from fitbit
 			var date = start_date.clone();
 			var cnt = days_to_dump;
 			do {
-				queue.push(requestData(date.clone()));
+				queue.push(
+					checkFitBitRecord(date.clone())
+						.then(function(result) {
+							if(!result.recordAvailable) {
+								processed_count++;
+								return requestData(result.date);
+							}
+							else
+								ignored_count++;
+						}));
 				date.add(1, 'days');
 				cnt--;
 			} while(cnt > 0);
 			
 			Q.all(queue)
 				.then(function(result) {
+					hideProgress();
 					deferred.resolve();
 				})
 				.fail(function(error) {
-					deferred.reject(new Error(error));
+					hideProgress();
+					deferred.reject(error);
 				});
 		}
 	});
@@ -243,9 +276,9 @@ function doWork() {
 
 function doExit(error) {
 	if(error)
-		log(LOG_ERROR, 'FitBit dumper completed with errors'.red, error);
+		log(LOG_ERROR, true, 'FitBit dumper completed with errors'.red, error);
 	else
-		log(LOG_OK, 'FitBit dumper completed');
+		log(LOG_OK, true, 'FitBit dumper completed');
 	db.close();
 	process.exit();
 }
@@ -259,11 +292,11 @@ function requestToken() {
 	var deferred = Q.defer();
 	
 	// request an app token/pin
-	log(LOG_INFO, 'Requesting FitBit OAuth token ...');
+	log(LOG_INFO, true, 'Requesting FitBit OAuth token ...');
 
 	fitbitClient.getAccessToken(fakeRequest, fakeResponse, function (error, newToken) {
 		if(error) {
-			log(LOG_ERROR, 'Error requesting OAuth token');
+			log(LOG_ERROR, true, 'Error requesting OAuth token');
 			deferred.reject(new Error(error));
 		}
 		else {
@@ -272,18 +305,18 @@ function requestToken() {
 //console.log('----------');
 			if(newToken) {
 				master_token = newToken;
-				log(LOG_OK, 'New OAuth token available', master_token);
+				log(LOG_OK, true, 'New OAuth token available', master_token);
 
 				// save oauth token
 				fs.writeFile('./fitbit.oauth', 
 					JSON.stringify(newToken, null, 4), 
 					function(error) {
 						if(error) {
-							log(LOG_ERROR, 'Invalid OAuth token format');
+							log(LOG_ERROR, true, 'Invalid OAuth token format');
 							deferred.reject(new Error(error));
 						}
 						else
-							log(LOG_OK, 'FitBit OAuth credentials saved');
+							log(LOG_OK, true, 'FitBit OAuth credentials saved');
 							
 						deferred.resolve();
 					});
@@ -295,7 +328,7 @@ function requestToken() {
 }
 
 function requestData(date) {
-	//log(LOG_INFO, 'Calling FitBit data API ...');
+	//log(LOG_INFO, true, 'Calling FitBit data API ...');
 	
 	var queue = [];
 	
@@ -323,13 +356,15 @@ function requestData(date) {
 function callFitBitApi(method, url) {
 	var deferred = Q.defer();
 	
+	showProgress('Fitbit API');
+	
 	fitbitClient.apiCall(
 		method, 
 		url,
 		{ token: master_token },
 		function(error, res, activities) {
 			if(error)
-				deferred.reject(new Error(error));
+				deferred.reject(error);
 			else
 				deferred.resolve(activities);
 		});
@@ -345,12 +380,12 @@ function callFitBitApi(method, url) {
 function createDatabase() {
 	var deferred = Q.defer();
 	
-	log(LOG_INFO, 'Initializing database');
+	log(LOG_INFO, true, 'Initializing database');
 
 	db.serialize(function() {
 		db.run('DROP TABLE IF EXISTS data', function(error) {
 			if(error) {
-				log(LOG_ERROR, 'Error droping data table');
+				log(LOG_ERROR, true, 'Error droping data table');
 				deferred.reject(new Error(error));
 			}
 			else
@@ -378,18 +413,18 @@ function createDatabase() {
 					'Efficiency FLOAT NOT NULL DEFAULT 0.0' + 
 					')', function(error) {
 						if(error) {
-							log(LOG_ERROR, 'Error creating data table');
+							log(LOG_ERROR, true, 'Error creating data table');
 							deferred.reject(new Error(error));
 						}
 						else {
 							db.run('CREATE UNIQUE INDEX data_date ON ' +
 								'data(date);', function(error) {
 									if(error) {
-										log(LOG_ERROR, 'Error creating data table index', error);
+										log(LOG_ERROR, true, 'Error creating data table index', error);
 										deferred.reject(new Error(error));
 									}
 									else {
-										log(LOG_OK, 'Database successfully initialized');
+										log(LOG_OK, true, 'Database successfully initialized');
 										deferred.resolve();
 									}
 								});								
@@ -404,8 +439,11 @@ function createDatabase() {
 function saveFitBitRecord(date, activities, weight, sleep) {
 	var deferred = Q.defer();
 	
-	log(LOG_DEBUG, 'Save FitBit data to database ' + date.format('YYYY-MM-DD'));
+	log(LOG_DEBUG, true, 'Save FitBit data to database ' + 
+		date.format('YYYY-MM-DD').cyan);
 
+	showProgress('Save to database');
+	
 	db.serialize(function() {
 		// Weight
 		var weightKg = 0.0;
@@ -451,37 +489,31 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 			}
 		}
 		
-		var sql = "INSERT INTO data VALUES (" +
-			"\r\n" + 
-			"(date('" + date.format('YYYY-MM-DD') + "')), " +
-			activities.summary.steps + ', ' + activities.summary.floors + ', ' +
-			activities.summary.caloriesOut + ', ' + activities.summary.fairlyActiveMinutes + ', ' +
-			activities.summary.lightlyActiveMinutes + ', ' + activities.summary.veryActiveMinutes + ', ' +
-			"\r\n" + 
-			weightKg + ', ' + weightTime + ', ' + weightBmi + ', ' +
-			"\r\n" + 
-			sleepStartTime + ', ' + MinutesToFallAsleep + ', ' + AwakeningCount + ', ' +
-			AwakeCount + ', ' + MinutesAwake + ', ' + MinutesRestless + ', ' + DurationMs + ', ' +
-			RestlessCount + ', ' + MinutesToAwake + ', ' + MinutesAfterWakeup + ', ' + 
+		var orReplace = (options.force ? 'OR REPLACE' : '');
+		var sql = "INSERT " + orReplace + " INTO data VALUES (" +
+			"(date('" + date.format('YYYY-MM-DD') + "'))," +
+			activities.summary.steps + ',' + activities.summary.floors + ',' +
+			activities.summary.caloriesOut + ',' + activities.summary.fairlyActiveMinutes + ',' +
+			activities.summary.lightlyActiveMinutes + ',' + activities.summary.veryActiveMinutes + ',' +
+			weightKg + ',' + weightTime + ',' + weightBmi + ',' +
+			sleepStartTime + ',' + MinutesToFallAsleep + ',' + AwakeningCount + ',' +
+			AwakeCount + ',' + MinutesAwake + ',' + MinutesRestless + ',' + DurationMs + ',' +
+			RestlessCount + ',' + MinutesToAwake + ',' + MinutesAfterWakeup + ',' + 
 			Efficiency +
 			')';
-		log(LOG_DEBUG, 'SQL insert statement', sql);
+		log(LOG_DEBUG, true, 'SQL insert statement', sql);
 			
 		db.run(sql,
 			function(error) {
 				if(error) {
-					// D = DB Write
-					if(!options.verbose)
-						process.stdout.write('D'.red);
-					else
-						log(LOG_ERROR, 'Error writing database', error);
-					deferred.reject(new Error(error));
+					hideProgress();
+					log(LOG_ERROR, true, 'Error writing database', error);
+					// ignore error and continue with next action if any
+					//deferred.reject(error);
+					deferred.resolve();
 				}
 				else {
-					if(!options.verbose)
-						process.stdout.write('D'.green);
-					else
-						log(LOG_DEBUG, 'FitBit data successfully saved');
+					log(LOG_DEBUG, true, 'FitBit data successfully saved');
 					deferred.resolve();
 				}
 			});
@@ -490,22 +522,74 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 	return deferred.promise;
 }
 
+function checkFitBitRecord(date) {
+	var deferred = Q.defer();
+	
+	log(LOG_DEBUG, true, 'Check FitBit data in database for date ' + 
+		date.format('YYYY-MM-DD').cyan);
+		
+	if(options.force) {
+		log(LOG_DEBUG, true, 'Local record availability check for date ' + 
+			date.format('YYYY-MM-DD').cyan + 
+			' omitted');
+		deferred.resolve({
+			recordAvailable: false, 
+			date: date
+		});
+		return deferred.promise;
+	}
+	
+	showProgress(undefined, true);
+	
+	var sql = "SELECT COUNT(*) AS count FROM data " +
+		"WHERE date = (date('" + date.format('YYYY-MM-DD') + "'))";
+	log(LOG_DEBUG, true, 'SQL check statement', sql);
+		
+	db.get(sql,
+		function(error, result) {
+			if(error) {
+				log(LOG_ERROR, true, 'Error checking database for date ' +
+					date.format('YYYY-MM-DD').cyan);
+				deferred.reject(error);
+			}
+			else {
+				var recordAvailable = result.count > 0;
+				
+				if(recordAvailable)
+					log(LOG_DEBUG, true, 'Local record available for date ' + 
+						date.format('YYYY-MM-DD').cyan + 
+						' no data requested from FitBit');
+				else
+					log(LOG_DEBUG, true, 'No local record available for date ' + 
+						date.format('YYYY-MM-DD').cyan + 
+						' request data from FitBit');
+				
+				deferred.resolve({
+					recordAvailable: recordAvailable, 
+					date: date
+				});
+			}
+		});
+	
+	return deferred.promise;
+}
+
 function dumpDatabase() {
 	var deferred = Q.defer();
 	
-	log(LOG_INFO, 'Dump FitBit records');
-	log(LOG_INFO, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
+	log(LOG_INFO, true, 'Dump FitBit records');
+	log(LOG_INFO, true, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', Days: ' + days_to_dump.toString().cyan);
 	
 	db.each('SELECT rowid AS id, * ' +
 			'FROM data ORDER BY date ASC', function(error, row) {
 		if(error) {
-			log(LOG_ERROR, 'Error reading database', error);
-			deferred.reject(new Error(error));
+			log(LOG_ERROR, true, 'Error reading database');
+			deferred.reject(error);
 		}
 		else {
-			log(LOG_DEBUG, 'DB record', row);
+			log(LOG_DEBUG, true, 'DB record', row);
 			console.log(row.id + ',' +
 				row.date + ',' +
 				row.steps + ',' +
@@ -557,34 +641,89 @@ function ask(question, format, deferred) {
 function checkDate(dateString, message) {
 	var date = moment(dateString, 'YYYYMMDD');
 	if(!date.isValid()) {
-		log(LOG_ERROR, 'Bad ' + message +' specified (' + dateString + ')');
+		log(LOG_ERROR, true, 'Bad ' + message +' specified (' + dateString + ')');
 		return null;
 	}
 	else
 		return date;
 }
 
-function log(severity, message, object) {
-	switch(severity) {
-		case 0:
-			if(options.verbose)
-				console.log('[DBG] '.grey + message);
+function showProgress(prompt, start) {
+	if(start)
+		progress_tick = 0;
+	if(progress_tick >= PROGRESS_CHARS.length)
+		progress_tick = 0;
+	if(typeof(prompt) !== 'undefined')
+		progress_prompt = prompt;
+	//process.stdout.write(PROGRESS_CHARS[progress_tick++] + '\r');
+	var m = progress_prompt + ' [' + PROGRESS_CHARS[progress_tick++].cyan + ']';
+	log(LOG_INFO, true, m, undefined, 2);
+}
+
+function hideProgress() {
+	log(LOG_INFO, false, 
+		'                                                                                ', 
+		undefined, 2);
+	progress_tick = null;
+}
+
+function log(severity, logTime, message, object, eolMode) {
+	var ts = '';
+	var w;
+	var eol;
+
+	switch(eolMode) {
+		case 1:
+			eol = '';
 			break;
 		case 2:
-			console.log('[OK ] '.green + message);
-			break;
-		case 3:
-			console.log('[WRN] '.yellow + message);
-			break;
-		case 4:
-			console.log('[ERR] '.red + message.toString().red);
+			eol = (process.platform == 'win32' || process.platform == 'win64' ?
+					'\u001B[0G' : '\r');
 			break;
 		default:
-			console.log('[INF] '.white + message);
+			eol = os.EOL;
 			break;
 	}
+	
+	if(logTime === true) {
+		var now = new Date();
+		ts = sprintf(' %04d%02d%02d %02d%02d.%-4d', 
+			now.getFullYear(),
+			now.getMonth() + 1,
+			now.getDate(),
+			now.getHours(),
+			now.getMinutes(),
+			now.getSeconds(),
+			now.getMilliseconds());
+	}	
 
-	if(object)
-		if(severity > 3 || options.verbose)
-			console.log(util.inspect(object, { showHidden: true, depth: 2, colors: true }));
+	switch(severity) {
+		case LOG_DEBUG:
+			if(options.verbose) {
+				w = '[DBG' + ts + '] ';
+				process.stdout.write(w.grey + message + eol);
+			}
+			break;
+		case LOG_OK:
+			w = '[OK ' + ts + '] ';
+			process.stdout.write(w.green + message + eol);
+			break;
+		case LOG_WARNING:
+			w = '[WRN' + ts + '] ';
+			process.stdout.write(w.yellow + message + eol);
+			break;
+		case LOG_ERROR:
+			w = '[ERR' + ts + '] ';
+			process.stdout.write(w.red + message + eol);
+			break;
+		default:
+			w = '[INF' + ts + '] ';
+			process.stdout.write(w.white + message + eol);
+			break;
+	}
+		
+	if(typeof(object) !== 'undefined')
+		if(severity > 3 || options.verbose) {
+			console.log(util.inspect(object, { showHidden: true, depth: 5, colors: true }));
+		}
 }
