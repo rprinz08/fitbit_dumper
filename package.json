@@ -4,9 +4,10 @@
 	"private": true,
 	"dependencies": {
 		"q": "1.1.1",
+		"intl": "0.1.4", 
 		"colors": "1.0.3",
 		"fitbit-js": "0.3.0",
-		"printf": "0.1.2",
+		"sprintf": "0.1.5",
 		"open": "0.0.4",
 		"stdio": "0.2.7",
 		"moment": "2.9.0",

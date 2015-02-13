@@ -21,6 +21,7 @@
 
 var Q = require('q'),
 	util = require('util'),
+	intl = require('intl'),
 	os = require('os'),
 	fs = require('fs'),
 	sprintf = require('sprintf').sprintf,
@@ -74,6 +75,7 @@ var options = stdio.getopt({
 	'end': { key: 'e', description: 'End date ' + DATE_FORMAT, args: 1 },
 	'force': { key: 'f', description: 'Force download from FitBit, even if local data already exists', args: 1 },
 	'verbose': { key: 'v', description: 'Verbose debug output' },
+	'quiet': { key: 'q', description: 'No output at all; overrules --verbose' },
 	'dbinit': { key: 'i', description: '(Re)Initialize database. ' + 'DELETES ALL EXISTING LOCAL DATA!'.red },
 	'dbdump': { key: 'd', description: 'Dump out database as CSV' },
 	'register': { key: 'r', description: '(Re)Register with FitBit' }
@@ -280,7 +282,7 @@ function doExit(error) {
 	else
 		log(LOG_OK, true, 'FitBit dumper completed');
 	db.close();
-	process.exit();
+	process.exit((error ? 1 : 0));
 }
 
 
@@ -577,11 +579,40 @@ function checkFitBitRecord(date) {
 function dumpDatabase() {
 	var deferred = Q.defer();
 	
+	// quick and dirty CSV generation
+	var delimiter = ';';
+	var quote = '"';
+			
 	log(LOG_INFO, true, 'Dump FitBit records');
 	log(LOG_INFO, true, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', End: ' + end_date.format(DISPLAY_DATE_FORMAT).cyan + 
 		', Days: ' + days_to_dump.toString().cyan);
 	
+	console.log(
+		'id' + delimiter +
+		'date' + delimiter +
+		'steps' + delimiter +
+		'floors' + delimiter +
+		'burnedCal' + delimiter +
+		'lightAct' + delimiter +
+		'mediumAct' + delimiter +
+		'highAct' + delimiter + 
+		'weightKg' + delimiter +
+		'weightTime' + delimiter +
+		'weightBmi' + delimiter +
+		'sleepStartTime' + delimiter +
+		'MinutesToFallAsleep' + delimiter +
+		'AwakeningCount' + delimiter +
+		'AwakeCount' + delimiter +
+		'MinutesAwake' + delimiter +
+		'MinutesRestless' + delimiter +
+		'DurationMs' + delimiter +				
+		'RestlessCount' + delimiter +
+		'MinutesToAwake' + delimiter +
+		'MinutesAfterWakeup' + delimiter +
+		'Efficiency'
+	);
+			
 	db.each('SELECT rowid AS id, * ' +
 			'FROM data ORDER BY date ASC', function(error, row) {
 		if(error) {
@@ -590,15 +621,41 @@ function dumpDatabase() {
 		}
 		else {
 			log(LOG_DEBUG, true, 'DB record', row);
-			console.log(row.id + ',' +
-				row.date + ',' +
-				row.steps + ',' +
-				row.floors + ',' +
-				row.burnedCal + ',' +
-				row.lightAct + ',' +
-				row.mediumAct + ',' +
-				row.highAct + ',' + 
-				row.weight);
+
+			var weightTime = (!row.weightTime || row.weightTime === 'null' ?
+				'' : quote + row.weightTime + quote);
+			var sleepStartTime = (!row.sleepStartTime || row.sleepStartTime === 'null' ?
+				'' : quote + row.sleepStartTime + quote);
+				
+//console.log(row.weightKg);			
+//console.log(typeof(row.weightKg));
+//console.log(parseFloat(row.weightKg));
+//console.log(row.weightKg.toLocaleString('de'));
+
+			console.log(
+				row.id + delimiter +
+				quote + row.date + quote + delimiter +
+				row.steps + delimiter +
+				row.floors + delimiter +
+				row.burnedCal + delimiter +
+				row.lightAct + delimiter +
+				row.mediumAct + delimiter +
+				row.highAct + delimiter + 
+				row.weightKg.toLocaleString('de-DE') + delimiter +
+				weightTime + delimiter +
+				row.weightBmi.toLocaleString('de-DE') + delimiter +
+				sleepStartTime + delimiter +
+				row.MinutesToFallAsleep + delimiter +
+				row.AwakeningCount + delimiter +
+				row.AwakeCount + delimiter +
+				row.MinutesAwake + delimiter +
+				row.MinutesRestless + delimiter +
+				row.DurationMs + delimiter +				
+				row.RestlessCount + delimiter +
+				row.MinutesToAwake + delimiter +
+				row.MinutesAfterWakeup + delimiter +
+				row.Efficiency.toLocaleString('de-DE')
+			);
 		}
 	}, 
 	function() {
@@ -672,6 +729,9 @@ function log(severity, logTime, message, object, eolMode) {
 	var w;
 	var eol;
 
+	if(options.quiet)
+		return;
+		
 	switch(eolMode) {
 		case 1:
 			eol = '';
