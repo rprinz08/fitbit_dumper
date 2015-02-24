@@ -1,8 +1,11 @@
 {
-	"name": "lost-node",
-	"version": "0.0.1",
-	"private": true,
-	"dependencies": {
+	"name": "FitBit Dumper",
+	"version": "1.0.0",
+  "description": "A tool and library for using then Google Glass Mirror API from node.js",
+  "main": "app.js",
+  "directories": {
+  },
+  "dependencies": {
 		"q": "1.1.1",
 		"intl": "0.1.4", 
 		"colors": "1.0.3",
@@ -12,5 +15,28 @@
 		"stdio": "0.2.7",
 		"moment": "2.9.0",
 		"sqlite3": "2.2.0"
-	}
+  },
+  "bin": {
+    "fbdump": "./app.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rprinz08/fitbit_dumper.git"
+  },
+  "keywords": [
+    "FitBit",
+    "Export",
+    "CSV",
+    "sqlite",
+    "node.js"
+  ],
+  "homepage": "http://www.min.at/prinz/fitbit_dumper",
+  "author": {
+    "name": "Richard Prinz",
+    "email": "richard.prinz@min.at",
+    "url": "http://www.min.at/prinz"
+  },
+  "license": "MIT",
+  "readme": "",
+  "readmeFilename": "README.md"
 }

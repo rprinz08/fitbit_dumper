@@ -1,23 +1,46 @@
+"use strict"
+
 /*
-	https://wiki.fitbit.com/display/API/Fitbit+API
+	FitBit Dumper
+	
+	A utility to automatically dump portions of FitBit data to a local SqLite
+	database for further processing or export into CSV.
 
-	keys at: https://dev.fitbit.com/apps/details/22988D
+	Copyright (c) 2015 richard.prinz@min.at
 
-	Consumer key
-	2fb466d29ca149799037a6a263ba0bfc
+	Permission is hereby granted, free of charge, to any person obtaining a copy
+	of this software and associated documentation files (the "Software"), to deal
+	in the Software without restriction, including without limitation the rights
+	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	copies of the Software, and to permit persons to whom the Software is
+	furnished to do so, subject to the following conditions:
 
-	Consumer secret
-	91f273d309e746119b4f0f9303363cb7
+	The above copyright notice and this permission notice shall be included in
+	all copies or substantial portions of the Software.
 
-	Request token URL
-	http://api.fitbit.com/oauth/request_token
-
-	Access token URL
-	http://api.fitbit.com/oauth/access_token
-
-	Authorize URL
-	http://www.fitbit.com/oauth/authorize
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+	THE SOFTWARE.
 */
+
+
+// ----------------------------------------------------------------------------
+// make configuration changes here
+
+var FB_CONSUMER_KEY = '2fb466d29ca149799037a6a263ba0bfc';
+var FB_CONSUMER_SEC = '91f273d309e746119b4f0f9303363cb7';
+
+var CSV_DELIMITER = ';';
+var CSV_QUOTE = '"';
+//var CSV_LOCALE = 'de-DE';
+var CSV_LOCALE = undefined;
+
+// ----------------------------------------------------------------------------
+// dont change anything after this line
 
 var Q = require('q'),
 	util = require('util'),
@@ -37,10 +60,8 @@ var myName = process.argv[1];
 
 var FAKE_URL = 'http://dummy';
 
-var fb_consumer_key = '2fb466d29ca149799037a6a263ba0bfc';
-var fb_consumer_sec = '91f273d309e746119b4f0f9303363cb7';
 var fitbitClient = require('fitbit-js')
-		(fb_consumer_key, fb_consumer_sec, FAKE_URL);
+		(FB_CONSUMER_KEY, FB_CONSUMER_SEC, FAKE_URL);
 
 var VERSION = '1.0';
 var LOG_DEBUG = 0;
@@ -75,7 +96,7 @@ var options = stdio.getopt({
 	'end': { key: 'e', description: 'End date ' + DATE_FORMAT, args: 1 },
 	'force': { key: 'f', description: 'Force download from FitBit, even if local data already exists', args: 1 },
 	'verbose': { key: 'v', description: 'Verbose debug output' },
-	'quiet': { key: 'q', description: 'No output at all; overrules --verbose' },
+	'quiet': { key: 'q', description: 'No output at all; overrules --verbose; assumes YES to all questions' },
 	'dbinit': { key: 'i', description: '(Re)Initialize database. ' + 'DELETES ALL EXISTING LOCAL DATA!'.red },
 	'dbdump': { key: 'd', description: 'Dump out database as CSV' },
 	'register': { key: 'r', description: '(Re)Register with FitBit' }
@@ -108,7 +129,7 @@ var fakeResponse = {
 			oauth_token = pu.query.oauth_token;
 			log(LOG_DEBUG, true, 'oauth_token', oauth_token);
 
-			console.log('\r\n\r\Use your browser to open this URL:\r\n');
+			console.log('\r\n\r\nUse your browser to open this URL:\r\n');
 			console.log(redirectToUrl.cyan);
 			console.log('\r\nThen come back and enter the PIN here\r\n');
 
@@ -156,10 +177,28 @@ function main() {
 	log(LOG_DEBUG, true, 'FitBit client, Version ' + fitbitClient.version);
 
 	if(options.register)
-		return requestToken();
+		if(options.quiet)
+			return requestToken();
+		else
+			return ask("Reregister application with FitBit [yn] ?", /[yYnN]/)
+				.then(function(answer) {
+					if(answer == 'y' || answer == 'Y')
+						return requestToken();
+					else
+						return Q();
+				});
 	
 	if(options.dbinit)
-		return createDatabase();
+		if(options.quiet)
+			return createDatabase();
+		else
+			return ask("Initialize database (existing data will be deleted) [yn] ?", /[yYnN]/)
+				.then(function(answer) {
+					if(answer == 'y' || answer == 'Y')
+						return createDatabase();
+					else
+						return Q();
+				});
 	
 	if(options.start) {
 		start_date = checkDate(options.start, 'start date');
@@ -580,8 +619,8 @@ function dumpDatabase() {
 	var deferred = Q.defer();
 	
 	// quick and dirty CSV generation
-	var delimiter = ';';
-	var quote = '"';
+	var delimiter = CSV_DELIMITER;
+	var quote = CSV_QUOTE;
 			
 	log(LOG_INFO, true, 'Dump FitBit records');
 	log(LOG_INFO, true, 'Start: ' + start_date.format(DISPLAY_DATE_FORMAT).cyan + 
@@ -612,9 +651,15 @@ function dumpDatabase() {
 		'MinutesAfterWakeup' + delimiter +
 		'Efficiency'
 	);
+	
+	var sql = 'SELECT rowid AS id, * ' +
+			'FROM data ' + 
+			"WHERE date >= date('" + start_date.format('YYYY-MM-DD') + "') " + 
+			"AND date <= date('" + end_date.format('YYYY-MM-DD') + "') " +
+			'ORDER BY date ASC';
+	log(LOG_DEBUG, true, 'SQL dump statement', sql);
 			
-	db.each('SELECT rowid AS id, * ' +
-			'FROM data ORDER BY date ASC', function(error, row) {
+	db.each(sql, function(error, row) {
 		if(error) {
 			log(LOG_ERROR, true, 'Error reading database');
 			deferred.reject(error);
@@ -641,9 +686,9 @@ function dumpDatabase() {
 				row.lightAct + delimiter +
 				row.mediumAct + delimiter +
 				row.highAct + delimiter + 
-				row.weightKg.toLocaleString('de-DE') + delimiter +
+				row.weightKg.toLocaleString(CSV_LOCALE) + delimiter +
 				weightTime + delimiter +
-				row.weightBmi.toLocaleString('de-DE') + delimiter +
+				row.weightBmi.toLocaleString(CSV_LOCALE) + delimiter +
 				sleepStartTime + delimiter +
 				row.MinutesToFallAsleep + delimiter +
 				row.AwakeningCount + delimiter +
@@ -654,7 +699,7 @@ function dumpDatabase() {
 				row.RestlessCount + delimiter +
 				row.MinutesToAwake + delimiter +
 				row.MinutesAfterWakeup + delimiter +
-				row.Efficiency.toLocaleString('de-DE')
+				row.Efficiency.toLocaleString(CSV_LOCALE)
 			);
 		}
 	}, 
@@ -687,7 +732,7 @@ function ask(question, format, deferred) {
 			deferred.resolve(data);
 		}
 		else {
-			stdout.write("It should match: "+ format +"\n");
+			stdout.write(("It should match: " + format + "\n").red);
 			ask(question, format, deferred);
 		}
 	});
