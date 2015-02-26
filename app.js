@@ -76,6 +76,8 @@ var oauth_verifier;
 
 var DATE_FORMAT = 'YYYYMMDD';
 var DISPLAY_DATE_FORMAT = 'YYYY.MM.DD';
+var SQL_DATE_FORMAT = 'YYYY-MM-DD';
+var FB_API_DATE_FORMAT = 'YYYY-MM-DD';
 var DEFAULT_DAYS = 13;
 var now = moment();
 var start_date = now.clone();
@@ -338,7 +340,7 @@ function requestToken() {
 	fitbitClient.getAccessToken(fakeRequest, fakeResponse, function (error, newToken) {
 		if(error) {
 			log(LOG_ERROR, true, 'Error requesting OAuth token');
-			deferred.reject(new Error(error));
+			deferred.reject(error);
 		}
 		else {
 //console.log('----------');
@@ -374,11 +376,11 @@ function requestData(date) {
 	var queue = [];
 	
 	// https://wiki.fitbit.com/display/API/API-Get-Activities
-	var actUrl = '/user/-/activities/date/' + date.format('YYYY-MM-DD') + '.json';
+	var actUrl = '/user/-/activities/date/' + date.format(FB_API_DATE_FORMAT) + '.json';
 	// https://wiki.fitbit.com/display/API/API-Get-Body-Weight
-	var weightUrl = '/user/-/body/log/weight/date/' + date.format('YYYY-MM-DD') + '.json';
+	var weightUrl = '/user/-/body/log/weight/date/' + date.format(FB_API_DATE_FORMAT) + '.json';
 	// https://wiki.fitbit.com/display/API/API-Get-Sleep
-	var sleepUrl = '/user/-/sleep/date/' + date.format('YYYY-MM-DD') + '.json';
+	var sleepUrl = '/user/-/sleep/date/' + date.format(FB_API_DATE_FORMAT) + '.json';
 	
 	queue.push(callFitBitApi('GET', actUrl));
 	queue.push(callFitBitApi('GET', weightUrl));
@@ -481,7 +483,7 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 	var deferred = Q.defer();
 	
 	log(LOG_DEBUG, true, 'Save FitBit data to database ' + 
-		date.format('YYYY-MM-DD').cyan);
+		date.format(SQL_DATE_FORMAT).cyan);
 
 	showProgress('Save to database');
 	
@@ -532,7 +534,7 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 		
 		var orReplace = (options.force ? 'OR REPLACE' : '');
 		var sql = "INSERT " + orReplace + " INTO data VALUES (" +
-			"(date('" + date.format('YYYY-MM-DD') + "'))," +
+			"(date('" + date.format(SQL_DATE_FORMAT) + "'))," +
 			activities.summary.steps + ',' + activities.summary.floors + ',' +
 			activities.summary.caloriesOut + ',' + activities.summary.fairlyActiveMinutes + ',' +
 			activities.summary.lightlyActiveMinutes + ',' + activities.summary.veryActiveMinutes + ',' +
@@ -549,9 +551,12 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 				if(error) {
 					hideProgress();
 					log(LOG_ERROR, true, 'Error writing database', error);
+					
 					// ignore error and continue with next action if any
-					//deferred.reject(error);
 					deferred.resolve();
+					
+					// cancel on any error
+					//deferred.reject(error);
 				}
 				else {
 					log(LOG_DEBUG, true, 'FitBit data successfully saved');
@@ -567,11 +572,11 @@ function checkFitBitRecord(date) {
 	var deferred = Q.defer();
 	
 	log(LOG_DEBUG, true, 'Check FitBit data in database for date ' + 
-		date.format('YYYY-MM-DD').cyan);
+		date.format(SQL_DATE_FORMAT).cyan);
 		
 	if(options.force) {
 		log(LOG_DEBUG, true, 'Local record availability check for date ' + 
-			date.format('YYYY-MM-DD').cyan + 
+			date.format(SQL_DATE_FORMAT).cyan + 
 			' omitted');
 		deferred.resolve({
 			recordAvailable: false, 
@@ -583,14 +588,14 @@ function checkFitBitRecord(date) {
 	showProgress(undefined, true);
 	
 	var sql = "SELECT COUNT(*) AS count FROM data " +
-		"WHERE date = (date('" + date.format('YYYY-MM-DD') + "'))";
+		"WHERE date = (date('" + date.format(SQL_DATE_FORMAT) + "'))";
 	log(LOG_DEBUG, true, 'SQL check statement', sql);
 		
 	db.get(sql,
 		function(error, result) {
 			if(error) {
 				log(LOG_ERROR, true, 'Error checking database for date ' +
-					date.format('YYYY-MM-DD').cyan);
+					date.format(SQL_DATE_FORMAT).cyan);
 				deferred.reject(error);
 			}
 			else {
@@ -598,11 +603,11 @@ function checkFitBitRecord(date) {
 				
 				if(recordAvailable)
 					log(LOG_DEBUG, true, 'Local record available for date ' + 
-						date.format('YYYY-MM-DD').cyan + 
+						date.format(SQL_DATE_FORMAT).cyan + 
 						' no data requested from FitBit');
 				else
 					log(LOG_DEBUG, true, 'No local record available for date ' + 
-						date.format('YYYY-MM-DD').cyan + 
+						date.format(SQL_DATE_FORMAT).cyan + 
 						' request data from FitBit');
 				
 				deferred.resolve({
@@ -654,8 +659,8 @@ function dumpDatabase() {
 	
 	var sql = 'SELECT rowid AS id, * ' +
 			'FROM data ' + 
-			"WHERE date >= date('" + start_date.format('YYYY-MM-DD') + "') " + 
-			"AND date <= date('" + end_date.format('YYYY-MM-DD') + "') " +
+			"WHERE date >= date('" + start_date.format(SQL_DATE_FORMAT) + "') " + 
+			"AND date <= date('" + end_date.format(SQL_DATE_FORMAT) + "') " +
 			'ORDER BY date ASC';
 	log(LOG_DEBUG, true, 'SQL dump statement', sql);
 			
