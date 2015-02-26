@@ -4,8 +4,8 @@
 /*
 	FitBit Dumper
 	
-	A utility to automatically dump portions of FitBit data to a local SqLite
-	database for further processing or export into CSV.
+	A utility to automatically dump portions of FitBit fitness data to a 
+	local SqLite database for further processing or export into a CSV file.
 
 	Copyright (c) 2015 richard.prinz@min.at
 
@@ -193,12 +193,12 @@ function main() {
 	
 	if(options.dbinit)
 		if(options.quiet)
-			return createDatabase();
+			return createDatabase(true);
 		else
 			return ask("Initialize database (existing data will be deleted) [yn] ?", /[yYnN]/)
 				.then(function(answer) {
 					if(answer == 'y' || answer == 'Y')
-						return createDatabase();
+						return createDatabase(true);
 					else
 						return Q();
 				});
@@ -227,13 +227,16 @@ function main() {
 
 	days_to_dump = end_date.diff(start_date, 'days') + 1;
 
-	if(options.dbdump)
-		return dumpDatabase();
+	if(options.dbdump) {
+		return createDatabase()
+				.then(function() { return dumpDatabase(); });
+	}
 	
 	// check if FitBitDump already authorized
 	fs.exists('./fitbit.oauth', function(exists) {
 		if(exists)
-			doWork()
+			createDatabase()
+				.then(function() { return doWork(); })
 				.then(function() {
 					log(LOG_OK, true, 
 						'Processed ' + processed_count.toString().cyan + ', ' +
@@ -406,11 +409,14 @@ function callFitBitApi(method, url) {
 		method, 
 		url,
 		{ token: master_token },
-		function(error, res, activities) {
+		function(error, res, result) {
 			if(error)
 				deferred.reject(error);
-			else
-				deferred.resolve(activities);
+			else {
+				log(LOG_DEBUG, true, 'FitBit data for: ' + method + ' ' + url,
+					result);
+				deferred.resolve(result);
+			}
 		});
 	
 	return deferred.promise;
@@ -421,60 +427,63 @@ function callFitBitApi(method, url) {
 // ----------------------------------------------------------------------------
 // Database functions
 
-function createDatabase() {
+function createDatabase(initialize) {
 	var deferred = Q.defer();
 	
-	log(LOG_INFO, true, 'Initializing database');
+	if(initialize)
+		log(LOG_INFO, true, 'Initializing database');
 
 	db.serialize(function() {
-		db.run('DROP TABLE IF EXISTS data', function(error) {
-			if(error) {
-				log(LOG_ERROR, true, 'Error droping data table');
-				deferred.reject(new Error(error));
-			}
-			else
-				db.run('CREATE TABLE data (' +
-					'date INTEGER NOT NULL, ' +
-					'steps INTEGER NOT NULL DEFAULT 0, ' +
-					'floors INTEGER NOT NULL DEFAULT 0, ' +
-					'burnedCal INTEGER NOT NULL DEFAULT 0, ' +
-					'lightAct INTEGER NOT NULL DEFAULT 0, ' +
-					'mediumAct INTEGER NOT NULL DEFAULT 0, ' +
-					'highAct INTEGER NOT NULL DEFAULT 0, ' +
-					'weightKg FLOAT NOT NULL DEFAULT 0.0, ' +
-					'weightTime INTEGER DEFAULT NULL, ' +
-					'weightBmi FLOAT NOT NULL DEFAULT 0, ' +
-					'sleepStartTime INTEGER DEFAULT 0,' +
-					'MinutesToFallAsleep INTEGER NOT NULL DEFAULT 0, ' +
-					'AwakeningCount INTEGER NOT NULL DEFAULT 0, ' +
-					'AwakeCount INTEGER NOT NULL DEFAULT 0, ' +
-					'MinutesAwake INTEGER NOT NULL DEFAULT 0, ' + 
-					'MinutesRestless INTEGER NOT NULL DEFAULT 0, ' +
-					'DurationMs INTEGER NOT NULL DEFAULT 0, ' + 
-					'RestlessCount INTEGER NOT NULL DEFAULT 0, ' +
-					'MinutesToAwake INTEGER NOT NULL DEFAULT 0, ' +
-					'MinutesAfterWakeup INTEGER NOT NULL DEFAULT 0, ' +
-					'Efficiency FLOAT NOT NULL DEFAULT 0.0' + 
-					')', function(error) {
-						if(error) {
-							log(LOG_ERROR, true, 'Error creating data table');
-							deferred.reject(new Error(error));
-						}
-						else {
-							db.run('CREATE UNIQUE INDEX data_date ON ' +
-								'data(date);', function(error) {
-									if(error) {
-										log(LOG_ERROR, true, 'Error creating data table index', error);
-										deferred.reject(new Error(error));
-									}
-									else {
-										log(LOG_OK, true, 'Database successfully initialized');
-										deferred.resolve();
-									}
-								});								
-						}
-					});
-		});
+	
+		if(initialize === true)
+			db.run('DROP TABLE IF EXISTS data', function(error) {
+				if(error) {
+					log(LOG_ERROR, true, 'Error droping data table');
+					deferred.reject(error);
+				}
+			});
+		
+		db.run('CREATE TABLE IF NOT EXISTS data (' +
+			'date INTEGER NOT NULL, ' +
+			'steps INTEGER NOT NULL DEFAULT 0, ' +
+			'floors INTEGER NOT NULL DEFAULT 0, ' +
+			'burnedCal INTEGER NOT NULL DEFAULT 0, ' +
+			'lightAct INTEGER NOT NULL DEFAULT 0, ' +
+			'mediumAct INTEGER NOT NULL DEFAULT 0, ' +
+			'highAct INTEGER NOT NULL DEFAULT 0, ' +
+			'weightKg FLOAT NOT NULL DEFAULT 0.0, ' +
+			'weightTime INTEGER DEFAULT NULL, ' +
+			'weightBmi FLOAT NOT NULL DEFAULT 0, ' +
+			'sleepStartTime INTEGER DEFAULT 0,' +
+			'MinutesToFallAsleep INTEGER NOT NULL DEFAULT 0, ' +
+			'AwakeningCount INTEGER NOT NULL DEFAULT 0, ' +
+			'AwakeCount INTEGER NOT NULL DEFAULT 0, ' +
+			'MinutesAwake INTEGER NOT NULL DEFAULT 0, ' + 
+			'MinutesRestless INTEGER NOT NULL DEFAULT 0, ' +
+			'DurationMs INTEGER NOT NULL DEFAULT 0, ' + 
+			'RestlessCount INTEGER NOT NULL DEFAULT 0, ' +
+			'MinutesToAwake INTEGER NOT NULL DEFAULT 0, ' +
+			'MinutesAfterWakeup INTEGER NOT NULL DEFAULT 0, ' +
+			'Efficiency FLOAT NOT NULL DEFAULT 0.0' + 
+			')', function(error) {
+				if(error) {
+					log(LOG_ERROR, true, 'Error creating data table');
+					deferred.reject(error);
+				}
+			});
+				
+		db.run('CREATE UNIQUE INDEX IF NOT EXISTS data_date ON ' +
+			'data(date);', function(error) {
+				if(error) {
+					log(LOG_ERROR, true, 'Error creating data table index');
+					deferred.reject(error);
+				}
+				else {
+					if(initialize)
+						log(LOG_OK, true, 'Database successfully initialized');
+					deferred.resolve();
+				}
+			});
     });
 	
 	return deferred.promise;
@@ -486,6 +495,16 @@ function saveFitBitRecord(date, activities, weight, sleep) {
 	log(LOG_DEBUG, true, 'Save FitBit data to database ' + 
 		date.format(SQL_DATE_FORMAT).cyan);
 
+	// dont write 'empty' records to database
+	if(activities.summary.steps === 0 && 
+		activities.summary.floors === 0 &&
+		activities.summary.fairlyActiveMinutes === 0 && 
+		activities.summary.lightlyActiveMinutes === 0 &&
+		activities.summary.veryActiveMinutes === 0) {
+		log(LOG_DEBUG, true, 'Empty record ignored');
+		return;
+	}
+		
 	showProgress('Save to database');
 	
 	db.serialize(function() {
@@ -596,7 +615,7 @@ function checkFitBitRecord(date) {
 		function(error, result) {
 			if(error) {
 				log(LOG_ERROR, true, 'Error checking database for date ' +
-					date.format(SQL_DATE_FORMAT).cyan);
+					date.format(SQL_DATE_FORMAT).cyan, error);
 				deferred.reject(error);
 			}
 			else {
