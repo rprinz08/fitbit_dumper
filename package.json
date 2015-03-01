@@ -1,6 +1,6 @@
 {
 	"name": "fitbit_dumper",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "A tool for exporting FitBit fitness data to sqlite or CSV",
 	"main": "app.js",
 	"directories": {
