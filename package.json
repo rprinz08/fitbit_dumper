@@ -1,42 +1,42 @@
 {
-	"name": "fitbit_dumper",
-	"version": "1.0.1",
-	"description": "A tool for exporting FitBit fitness data to sqlite or CSV",
-	"main": "app.js",
-	"directories": {
-	},
-	"dependencies": {
-		"q": "~1.2.0",
-		"intl": "~0.1.4", 
-		"colors": "~1.0.3",
-		"fitbit-js": "~0.3.1",
-		"sprintf": "~0.1.5",
-		"open": "~0.0.5",
-		"stdio": "~0.2.7",
-		"moment": "~2.9.0",
-		"sqlite3": "~3.0.5"
-	},
-	"bin": {
-		"fbdump": "./app.js"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/rprinz08/fitbit_dumper.git"
-	},
-	"keywords": [
-		"FitBit",
-		"Export",
-		"CSV",
-		"sqlite",
-		"node.js"
-	],
-	"homepage": "http://www.min.at/prinz/fitbit_dumper",
-	"author": {
-		"name": "Richard Prinz",
-		"email": "richard.prinz@min.at",
-		"url": "http://www.min.at/prinz"
-	},
-	"license": "MIT",
-	"readme": "",
-	"readmeFilename": "README.md"
+  "name": "fitbit_dumper",
+  "version": "1.2.0",
+  "description": "A tool for exporting FitBit fitness data to sqlite or CSV",
+  "main": "app.js",
+  "directories": {},
+  "dependencies": {
+    "colors": "~1.0.3",
+    "fitbit-node": "^2.0.0",
+    "intl": "~0.1.4",
+    "lodash": "^4.14.1",
+    "moment": "~2.9.0",
+    "open": "~0.0.5",
+    "q": "~1.2.0",
+    "sprintf": "~0.1.5",
+    "sqlite3": "^3.1.4",
+    "stdio": "~0.2.7"
+  },
+  "bin": {
+    "fbdump": "./app.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rprinz08/fitbit_dumper.git"
+  },
+  "keywords": [
+    "FitBit",
+    "Export",
+    "CSV",
+    "sqlite",
+    "node.js"
+  ],
+  "homepage": "http://www.min.at/prinz/fitbit_dumper",
+  "author": {
+    "name": "Richard Prinz",
+    "email": "richard.prinz@min.at",
+    "url": "http://www.min.at/prinz"
+  },
+  "license": "MIT",
+  "readme": "",
+  "readmeFilename": "README.md"
 }

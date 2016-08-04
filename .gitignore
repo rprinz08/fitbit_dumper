@@ -1,6 +1,7 @@
 node_modules
+typings
 *.db
 *.oauth
-/private
+private
 /startDump.cmd
 /startDump.sh
