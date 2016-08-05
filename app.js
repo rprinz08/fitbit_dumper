@@ -36,6 +36,7 @@
 var FB_CLIENT_ID = '';
 var FB_CLIENT_SECRET = '';
 
+
 var CSV_DELIMITER = ';';
 var CSV_QUOTE = '"';
 //var CSV_LOCALE = 'de-DE';
@@ -114,7 +115,7 @@ var options = stdio.getopt({
 
 main()
 	.then(doExit)
-	.fail(doExit);
+	.catch(doExit);
 
 //process.stdin.setEncoding('utf8');
 
@@ -123,9 +124,11 @@ function main() {
 
 	log(LOG_INFO, true, 'FitBit Dumper, Version ' + VERSION);
 
-	if (!FB_CLIENT_ID || !FB_CLIENT_SECRET)
-		deferred.reject(new Error('Fitbit CLIENT_ID or CLIENT_SECRET not set! ' +
+	if (!FB_CLIENT_ID || !FB_CLIENT_SECRET) {
+		deferred.reject(new Error('Fitbit CLIENT_ID or CLIENT_SECRET not set in script code! ' +
 			'See http://www.min.at/prinz/fitbit_dumper for more infos'));
+		return deferred.promise;
+	}
 
 	if (options.register)
 		if (options.quiet)
@@ -184,14 +187,16 @@ function main() {
 	fs.exists(TOKEN_FILE, function (exists) {
 		if (exists)
 			createDatabase()
-				.then(function () { return doWork(); })
+				.then(function () {
+					return doWork();
+				})
 				.then(function () {
 					log(LOG_OK, true,
 						'Processed ' + processed_count.toString().cyan + ', ' +
 						'ignored: ' + ignored_count.toString().cyan);
 					deferred.resolve();
 				})
-				.fail(function (error) {
+				.catch(function (error) {
 					deferred.reject(error);
 				});
 		else {
@@ -203,11 +208,43 @@ function main() {
 				.then(function () {
 					deferred.resolve();
 				})
-				.fail(function (error) {
+				.catch(function (error) {
 					deferred.reject(error);
 				});
 		}
 	});
+
+	return deferred.promise;
+}
+
+// before doing anything check if access token has expired and if so
+// refresh OAuth2 token.
+function checkForExpiredToken() {
+	var deferred = Q.defer();
+
+	fitbitClient.get("/profile.json", master_token.access_token)
+		.then(function (result) {
+			var errorType = _.get(result, '[0].errors[0].errorType', null);
+
+			if (errorType == 'expired_token') {
+				return refreshToken()
+					.then(function () {
+						deferred.resolve();
+					})
+					.catch(function (error) {
+						deferred.reject(new Error(error));
+					});
+			}
+			else if (errorType) {
+				var m = _.get(error, 'context.errors[0].message', null);
+				deferred.reject(new Error(m));
+			}
+			else
+				deferred.resolve();
+		})
+		.catch(function (error) {
+			deferred.reject(new Error(error));
+		});
 
 	return deferred.promise;
 }
@@ -232,38 +269,42 @@ function doWork() {
 			var queue = [];
 			master_token = JSON.parse(data);
 			log(LOG_OK, true, 'Using FitBit API with local OAuth2 tokens', master_token);
-			log(LOG_INFO, true, 'Processing ...');
 
-			showProgress('Get data', true);
+			checkForExpiredToken()
+				.then(function () {
+					log(LOG_INFO, true, 'Processing ...');
 
-			// get data for each day from fitbit
-			var date = start_date.clone();
-			var cnt = days_to_dump;
-			do {
-				queue.push(
-					checkFitBitRecord(date.clone())
+					showProgress('Get data', true);
+
+					// get data for each day from fitbit
+					var date = start_date.clone();
+					var cnt = days_to_dump;
+					do {
+						queue.push(
+							checkFitBitRecord(date.clone())
+								.then(function (result) {
+									if (!result.recordAvailable) {
+										processed_count++;
+										return requestData(result.date);
+									}
+									else
+										ignored_count++;
+								}));
+						date.add(1, 'days');
+						cnt--;
+					} while (cnt > 0);
+
+					Q.all(queue)
 						.then(function (result) {
-							if (!result.recordAvailable) {
-								processed_count++;
-								return requestData(result.date);
-							}
-							else
-								ignored_count++;
-						}));
-				date.add(1, 'days');
-				cnt--;
-			} while (cnt > 0);
-
-			Q.all(queue)
-				.then(function (result) {
-					hideProgress();
-					deferred.resolve();
-				})
-				.fail(function (error) {
-					hideProgress();
-					deferred.reject(error);
+							hideProgress();
+							deferred.resolve();
+						})
+						.catch(function (error) {
+							hideProgress();
+							deferred.reject(error);
+						});
 				});
-		}
+		};
 	});
 
 	return deferred.promise;
@@ -293,17 +334,18 @@ function requestToken() {
 		'activity heartrate location nutrition profile settings sleep social weight',
 		FAKE_URL);
 
-	console.log('\r\n\r\nUse your browser to open this URL:\r');
-	console.log('(If it is not opened automatically)\r\n');
+	console.log(os.EOL + os.EOL + 'Use your browser to open this URL:');
+	console.log('(If it is not opened automatically)' + os.EOL);
 	console.log(auth_uri.cyan);
-	console.log('\r\nThen come back and enter the CODE here\r\n');
-	console.log('The CODE can be found in the address bar of your browser\r');
-	console.log('after you have been redirected to the NON EXISTING url\r');
-	console.log('"' + FAKE_URL.cyan + '" as url query parameter "code". Following url\r');
-	console.log('shows an example: "' + 'http://fb.dumper/?code=12b31e62afe83b807a92a9de810eedebd2564485#_=_'.cyan + '".\r');
-	console.log('Copy anything after "code=" up to "#" (or the start of the next url\r');
-	console.log('parameter or the end of the whole url) and paste it here. In this\r');
-	console.log('example the code was "' + '12b31e62afe83b807a92a9de810eedebd2564485'.red + '"\r\n');
+	console.log(os.EOL + 'Then come back and enter the CODE here.');
+	console.log('The CODE can be found in the address bar of your browser');
+	console.log('after you have been redirected to the NON EXISTING url');
+	console.log('"' + FAKE_URL.cyan + '" as url query parameter "code". Following url');
+	console.log('shows an example: "' + 'http://fb.dumper/?code=12b31e62afe83b807a92a9de810eedebd2564485#_=_'.cyan + '".');
+	console.log('Copy anything after "code=" up to "#" (or the start of the next url');
+	console.log('parameter or the end of the whole url) and paste it here. In this');
+	console.log('example the code was "' + '12b31e62afe83b807a92a9de810eedebd2564485'.red + '"');
+	console.log('Press CTRL+C to abort.' + os.EOL);
 
 	// start user browser for fitbit registration
 	spawn(auth_uri, function (error) {
@@ -329,10 +371,10 @@ function requestToken() {
 								log(LOG_ERROR, true, 'Invalid OAuth2 token format');
 								deferred.reject(new Error(error));
 							}
-							else
+							else {
 								log(LOG_OK, true, 'FitBit OAuth2 credentials saved');
-
-							deferred.resolve();
+								deferred.resolve();
+							}
 						});
 				})
 				.catch(function (error) {
@@ -341,10 +383,49 @@ function requestToken() {
 						log(LOG_ERROR, true, m);
 					m = _.get(error, 'context.errors[0].message', null);
 					if (m)
-						log(LOG_ERROR, true, error.context.errors[0].message);
+						log(LOG_ERROR, true, m);
 
 					deferred.reject(new Error(error));
 				});
+		});
+
+	return deferred.promise;
+}
+
+function refreshToken() {
+	var deferred = Q.defer();
+
+	// request an app token/code
+	log(LOG_INFO, true, 'Refreshing FitBit OAuth2 token ...');
+
+	fitbitClient.refreshAccesstoken(
+		master_token.access_token,
+		master_token.refresh_token)
+		.then(function (result) {
+			// save access and refresh token
+			fs.writeFile(TOKEN_FILE,
+				JSON.stringify(result, null, 4),
+				function (error) {
+					if (error) {
+						log(LOG_ERROR, true, 'Invalid OAuth2 token format');
+						deferred.reject(new Error(error));
+					}
+					else {
+						log(LOG_OK, true, 'FitBit OAuth2 credentials saved');
+						master_token = result;
+						deferred.resolve();
+					}
+				});
+		})
+		.catch(function (error) {
+			var m = _.get(error, 'message', null);
+			if (m)
+				log(LOG_ERROR, true, m);
+			m = _.get(error, 'context.errors[0].message', null);
+			if (m)
+				log(LOG_ERROR, true, m);
+
+			deferred.reject(new Error(error));
 		});
 
 	return deferred.promise;
@@ -386,25 +467,10 @@ function requestData(startDate, endDate) {
 
 	return Q.all(queue)
 		.then(function (results) {
-			//var error;
 			var activities = results[0];
 			var weight = results[1];
 			var sleep = results[2];
 
-			// check for errors
-			/*
-			error = _.get(activities, '[0].errors[0].message', null);
-			if (error)
-				throw new Error(error);
-
-			error = _.get(weight, '[0].errors[0].message', null);
-			if (error)
-				throw new Error(error);
-
-			error = _.get(sleep, '[0].errors[0].message', null);
-			if (error)
-				throw new Error(error);
-			*/
 			if (activities && weight && sleep)
 				return saveFitBitRecord(startDate, endDate, activities, weight, sleep);
 			else
@@ -417,11 +483,12 @@ function callFitBitApi(method, url) {
 
 	return fitbitClient[_.lowerCase(method)](url, master_token.access_token)
 		.then(function (result) {
-			debugger;
 			var error = _.get(result, '[0].errors[0].message', null);
-			log(LOG_WARNING, true, error);
-			if (error)
+
+			if (error) {
+				log(LOG_WARNING, true, error);
 				return null;
+			}
 			else
 				return result;
 		});
@@ -762,7 +829,7 @@ function ask(question, format, deferred) {
 			deferred.resolve(data);
 		}
 		else {
-			stdout.write(("It should match: " + format + "\n").red);
+			stdout.write(("It should match: " + format + os.EOL).red);
 			ask(question, format, deferred);
 		}
 	});
@@ -787,7 +854,6 @@ function showProgress(prompt, start) {
 		progress_tick = 0;
 	if (typeof (prompt) !== 'undefined')
 		progress_prompt = prompt;
-	//process.stdout.write(PROGRESS_CHARS[progress_tick++] + '\r');
 	var m = progress_prompt + ' [' + PROGRESS_CHARS[progress_tick++].cyan + ']';
 	log(LOG_INFO, true, m, undefined, 2);
 }

@@ -5,3 +5,4 @@ typings
 private
 /startDump.cmd
 /startDump.sh
+.browse*
